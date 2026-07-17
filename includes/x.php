@@ -13,7 +13,5 @@ if ($user_ip === '127.0.0.1' || $user_ip === '::1') {
 
 $host = 'localhost';
 $user = 'root';
-// $password = 'KataLaluan4kik@JTS';
-$password1 = 'KataLaluan4kik@JTS';
-$db = 'commands';
+$db = 'frs';
 ?>
