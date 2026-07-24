@@ -1,495 +1,512 @@
-<div class="container py-4">
+<div class="container-fluid py-4">
   <?php
+  // Year filter selection (Default: All Years or Current Year)
+  $selectedHqYear = trim((string)($_GET['year'] ?? date("Y")));
 
-  //Count Total Lapi
-  $sqlTot = "SELECT COUNT(*) AS count FROM project_name WHERE project_type = 'LAPI'";
-  $resTot = $conn->query($sqlTot);
-  $rowTot = $resTot->fetch_assoc();
-  $countTot = $rowTot['count'];
+  $yearWhereFR = "";
+  $yearWhereAction = "";
+  $yearWhereRefer = "";
 
-  //Count for total
-  $sqlTot = "SELECT COUNT(*) AS count FROM surveyjob AS a JOIN division AS b ON b.DIV_ID = a.sj_div";
-  $resTot = $conn->query($sqlTot);
-  $rowTot = $resTot->fetch_assoc();
-  $totalSJ = $rowTot['count'];
+  if ($selectedHqYear !== 'all' && !empty($selectedHqYear)) {
+      $yVal = (int)$selectedHqYear;
+      $yearWhereFR = " AND YEAR(date_add) = $yVal ";
+      $yearWhereAction = " AND frno IN (SELECT Frn FROM `fr` WHERE YEAR(date_add) = $yVal) ";
+      $yearWhereRefer = " AND FrRefId IN (SELECT Frn FROM `fr` WHERE YEAR(date_add) = $yVal) ";
+  }
 
-  //total fund
-  $sqlFund = "SELECT SUM(total_fund) AS total_fund FROM fund WHERE fund_type = 'LAPI'";
-  $resFund = $conn->query($sqlFund);
-  $rowFund = $resFund->fetch_assoc();
-  $total_fund = $rowFund['total_fund'];
+  // Initialize default counts safely
+  $totalFR = 0;
+  $newCount = 0;
+  $inProgressCount = 0;
+  $solvedCount = 0;
+  $unassignedCount = 0;
+  $softwareCount = 0;
+  $hardwareCount = 0;
+  $othersCount = 0;
+  $activeStaff = 0;
+  $inactiveStaff = 0;
+  $totalStaff = 0;
+  $sainsRefTotal = 0;
+  $recentFRs = [];
+  $divisionBreakdown = [];
+  $hqYearsList = [];
 
-  //total expenditure
-  $sqlExp = "SELECT SUM(expenditure) AS total_exp FROM expenditure AS a JOIN fund AS b ON b.fund_id = a.fund_id WHERE a.exp_type = 'EXP'";
-  $resExp = $conn->query($sqlExp);
-  $rowExp = $resExp->fetch_assoc();
-  $total_exp = $rowExp['total_exp'];
+  if (isset($conn) && $conn instanceof mysqli) {
+      // Get list of distinct years
+      $resY = $conn->query("SELECT DISTINCT YEAR(date_add) as yr FROM `fr` WHERE date_add IS NOT NULL AND YEAR(date_add) > 2000 ORDER BY yr DESC");
+      if ($resY) {
+          while ($yRow = $resY->fetch_assoc()) {
+              $hqYearsList[] = $yRow['yr'];
+          }
+      }
 
-  $fund_ach = ($total_exp / $total_fund) * 100;
+      // 1. Total FR (Headquarters only)
+      $res = $conn->query("SELECT COUNT(*) AS total FROM `fr` WHERE (Oridiv = 'Headquarters' OR Oridiv LIKE '%Headquarters%') " . $yearWhereFR);
+      if ($res && $row = $res->fetch_assoc()) {
+          $totalFR = (int)$row['total'];
+      }
 
-  //Total semua project
-  $sqlT = "SELECT COUNT(*) AS count FROM surveyjob";
-  $resT = $conn->query($sqlT);
-  $rowT = $resT->fetch_assoc();
-  $total_semua = $rowT['count'];
+      // 2. Solved FR (Headquarters only)
+      $res = $conn->query("SELECT COUNT(*) AS total FROM `action` WHERE frno IN (SELECT Frn FROM `fr` WHERE Oridiv = 'Headquarters' OR Oridiv LIKE '%Headquarters%') AND (FR_status = 'Close' OR action_status = 'Done') " . $yearWhereAction);
+      if ($res && $row = $res->fetch_assoc()) {
+          $solvedCount = (int)$row['total'];
+      }
 
-  //Total Progress
-  $sqlTProg = "SELECT COUNT(*) AS count FROM connector WHERE main_status != '10'";
-  $resTProg = $conn->query($sqlTProg);
-  $rowTProg = $resTProg->fetch_assoc();
-  $total_progress = $rowTProg['count'];
+      // 3. In Progress FR (Headquarters only)
+      $res = $conn->query("SELECT COUNT(*) AS total FROM `action` WHERE frno IN (SELECT Frn FROM `fr` WHERE Oridiv = 'Headquarters' OR Oridiv LIKE '%Headquarters%') AND FR_status = 'Open' AND action_status != 'Done' " . $yearWhereAction);
+      if ($res && $row = $res->fetch_assoc()) {
+          $inProgressCount = (int)$row['total'];
+      }
 
-  $sqlLP = "SELECT count(*) AS project FROM surveyjob AS a 
-            JOIN connector AS b ON a.sj_id = b.sj_id 
-            JOIN project_name AS c ON c.project_id = b.project_id
-            WHERE c.project_type = 'LAPI'";
-  $resLP = $conn->query($sqlLP);
-  $rowLP = $resLP->fetch_assoc();
-  $lpcount = $rowLP['project'];
+      // 4. New / Unassigned FR (Headquarters only)
+      $res = $conn->query("SELECT COUNT(*) AS total FROM `fr` WHERE (Oridiv = 'Headquarters' OR Oridiv LIKE '%Headquarters%') AND Frn NOT IN (SELECT Assfrno FROM `assign`) " . $yearWhereFR);
+      if ($res && $row = $res->fetch_assoc()) {
+          $newCount = (int)$row['total'];
+          $unassignedCount = $newCount;
+      }
 
-  $sqlNCR = "SELECT count(*) AS project FROM surveyjob AS a 
-            JOIN connector AS b ON a.sj_id = b.sj_id 
-            JOIN project_name AS c ON c.project_id = b.project_id
-            WHERE c.project_type = 'NCR'";
-  $resNCR = $conn->query($sqlNCR);
-  $rowNCR = $resNCR->fetch_assoc();
-  $ncrCount = $rowNCR['project'];
+      // 5. FR Categories (Headquarters only)
+      $res = $conn->query("SELECT COUNT(*) AS total FROM `fr` WHERE (Oridiv = 'Headquarters' OR Oridiv LIKE '%Headquarters%') AND (frcate LIKE '%Software%' OR frcate LIKE '%Application%') " . $yearWhereFR);
+      if ($res && $row = $res->fetch_assoc()) {
+          $softwareCount = (int)$row['total'];
+      }
 
-  $sqlLPa = "SELECT count(*) AS project FROM surveyjob AS a 
-            JOIN connector AS b ON a.sj_id = b.sj_id 
-            JOIN project_name AS c ON c.project_id = b.project_id
-            WHERE c.project_type = 'LAPI' AND b.main_status = '11'";
-  $resLPa = $conn->query($sqlLPa);
-  $rowLPa = $resLPa->fetch_assoc();
-  $lp_comp = $rowLPa['project'];
+      $res = $conn->query("SELECT COUNT(*) AS total FROM `fr` WHERE (Oridiv = 'Headquarters' OR Oridiv LIKE '%Headquarters%') AND frcate LIKE '%Hardware%' " . $yearWhereFR);
+      if ($res && $row = $res->fetch_assoc()) {
+          $hardwareCount = (int)$row['total'];
+      }
 
-  $sqlNCRa = "SELECT count(*) AS project FROM surveyjob AS a 
-            JOIN connector AS b ON a.sj_id = b.sj_id 
-            JOIN project_name AS c ON c.project_id = b.project_id
-            WHERE c.project_type = 'NCR' AND b.main_status = '11'";
-  $resNCRa = $conn->query($sqlNCRa);
-  $rowNCRa = $resNCRa->fetch_assoc();
-  $ncr_comp = $rowNCRa['project'];
+      $othersCount = max(0, $totalFR - ($softwareCount + $hardwareCount));
 
-  $lp_ach = $lp_comp / $lpcount * 100;
-  $ncr_ach = $ncr_comp / $ncrCount * 100;
+      // 6. Referral to External (SAINS/ISB) (Headquarters only)
+      $res = $conn->query("SELECT COUNT(*) AS total FROM `refer_to` WHERE FrRefId IN (SELECT Frn FROM `fr` WHERE Oridiv = 'Headquarters' OR Oridiv LIKE '%Headquarters%') AND (Refcate LIKE '%SAINS%' OR Refcate LIKE '%ISB%') " . $yearWhereRefer);
+      if ($res && $row = $res->fetch_assoc()) {
+          $sainsRefTotal = (int)$row['total'];
+      }
 
-  $sj_ach = ($lp_ach + $ncr_ach) / 2;
+      // 7. Headquarters Users count
+      $res = $conn->query("SELECT COUNT(*) AS total FROM `user` WHERE Division = 'Headquarters' OR Division LIKE '%Headquarters%'");
+      if ($res && $row = $res->fetch_assoc()) {
+          $totalStaff = (int)$row['total'];
+      }
 
+      $res = $conn->query("SELECT COUNT(*) AS total FROM `user` WHERE (Division = 'Headquarters' OR Division LIKE '%Headquarters%') AND active = 'Y'");
+      if ($res && $row = $res->fetch_assoc()) {
+          $activeStaff = (int)$row['total'];
+      }
+      $inactiveStaff = max(0, $totalStaff - $activeStaff);
+
+      // 8. Recent 5 Fault Reports (Headquarters only)
+      $resRecent = $conn->query("SELECT Frn, frcate, request_by, Oridiv, date_add FROM `fr` WHERE (Oridiv = 'Headquarters' OR Oridiv LIKE '%Headquarters%') " . $yearWhereFR . " ORDER BY date_add DESC LIMIT 5");
+      if ($resRecent) {
+          while ($rRow = $resRecent->fetch_assoc()) {
+              $recentFRs[] = $rRow;
+          }
+      }
+
+      // 9. Division Breakdown (Top Divisions by FR count)
+      $resDiv = $conn->query("SELECT Oridiv, COUNT(*) as total FROM `fr` WHERE Oridiv IS NOT NULL AND Oridiv != '' " . $yearWhereFR . " GROUP BY Oridiv ORDER BY total DESC LIMIT 5");
+      if ($resDiv) {
+          while ($dRow = $resDiv->fetch_assoc()) {
+              $divisionBreakdown[] = $dRow;
+          }
+      }
+  }
+
+  if (empty($hqYearsList)) {
+      $hqYearsList = [date("Y"), date("Y") - 1, date("Y") - 2];
+  }
+
+  $solvedRate = $totalFR > 0 ? round(($solvedCount / $totalFR) * 100, 1) : 0;
+  $inProgressRate = $totalFR > 0 ? round(($inProgressCount / $totalFR) * 100, 1) : 0;
+  $unassignedRate = $totalFR > 0 ? round(($unassignedCount / $totalFR) * 100, 1) : 0;
   ?>
-  <div class="row mt-4">
-    <div class="col-xl-4 col-sm-6 mb-xl-0 mb-4 ">
-      <div class="card bg-gradient-dark">
-        <div class="card-header p-3 pt-2 bg-gradient-dark">
-          <div class="text-start pt-1">
-            <p class="text-lg mb-3 text-capitalize text-white font-weight-bold">Fault Reports</p>
-            <p class="text-sm mb-0 text-white">total as (<?php echo date("Y") ?>)</p>
-            <h1 class="mb-0 text-white"><span class="count p-3"><?php echo $lpcount + $ncrCount ?></span><span class="text-lg ms-n1"></span></h1>
+
+  <!-- Header Banner -->
+  <div class="row mb-4">
+    <div class="col-12">
+      <div class="card bg-gradient-dark border-0 shadow-lg position-relative overflow-hidden p-3" style="border-radius: 1rem; background: linear-gradient(135deg, #1e1e2f 0%, #0f1016 100%);">
+        <div class="row align-items-center">
+          <div class="col-lg-7 col-md-6">
+            <span class="badge bg-gradient-info mb-2 text-uppercase tracking-wider px-3 py-2">HQ Fault Report Command Center</span>
+            <h2 class="text-white font-weight-bolder mb-1">Fault Report System Overview</h2>
+            <p class="text-white opacity-8 text-sm mb-0 text-uppercase">COMPREHENSIVE MONITORING OF DEVICE & APPLICATION FAULT REPORTS, EXTERNAL REFERRALS (SAINS), AND DIVISIONAL STATISTICS.</p>
           </div>
-        </div>
-        <div class="card-footer pt-2 pb-2 m-2" align="center">
-          <div class="row align-items-center">
-            <div class="col-sm-4 col-xl-4">
-              <a href="ncr">
-                <h6 class="mb-0 text-white">New</h6>
-                <p class="mb-0"><span class="text-white text-sm font-weight-bolder"><?php echo $ncrCount ?></span></p>
-              </a>
-            </div>
-            <div class="col-sm-4 col-xl-4">
-              <h6 class="mb-0 text-white">In Progress</h6>
-              <p class="mb-0"><span class="text-white text-sm font-weight-bolder"><?php echo $lpcount ?></span></p>
-            </div>
-            <div class="col-sm-4 col-xl-4">
-              <h6 class="mb-0 text-success">Solved</h6>
-              <p class="mb-0"><span class="text-white text-sm font-weight-bolder">0</span></p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="col-xl-4 col-sm-6 mb-xl-0 mb-4 "> <a href="financial.php">
-        <div class="card bg-gradient-dark">
-          <div class="card-header p-3 pt-2 bg-gradient-dark">
-            <div class="text-start pt-1">
-              <p class="text-lg mb-3 text-capitalize text-white font-weight-bold">In Progress</p>
-              <div class="row">
-                <div class="col-8">
-                  <p class="text-sm mb-0 text-white">percentage</p>
-                  <h1 class="mb-0 text-white"><span class="p-3"><?php echo round($sj_ach, 2) ?></span><span class="text-lg ms-n1">%</span></h1>
-                </div>
-                <div class="col-4 mt-4 " align="right">
-                  <p class="text-sm mb-0 text-white opacity-7">Total SJ</p>
-                  <h5 class="mb-0 text-white opacity-5">
-                    <span class="p-0"><?php echo $lpcount + $ncrCount ?></span>
-                    </h6>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="card-footer pt-2 pb-2 m-2" align="center">
-            <div class="row align-items-center">
-              <div class="col-sm-4 col-xl-4">
-                <h6 class="mb-0 text-white">Pending</h6>
-                <p class="mb-0"><span class="text-white text-sm font-weight-bolder"><?php echo round($ncr_ach, 2) ?>% </span></p>
-              </div>
-              <div class="col-sm-4 col-xl-4">
-                <h6 class="mb-0 text-white">Unassigned</h6>
-                <p class="mb-0"><span class="text-white text-sm font-weight-bolder"><span class="count"><?php echo round($lp_ach, 2) ?></span>%</span></p>
-              </div>
-              <div class="col-sm-4 col-xl-4">
-                <h6 class="mb-0 text-white">Others</h6>
-                <p class="mb-0"><span class="text-white text-sm font-weight-bolder">0% </span></p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </a> </div>
-    <div class="col-xl-4 col-sm-12 mb-xl-0 mb-4 ">
-      <div class="card bg-gradient-dark"> <a href="hr_overview.php">
-          <div class="card-header p-3 pt-2 bg-gradient-dark">
-            <div class="text-start pt-1">
-              <p class="text-lg mb-3 text-capitalize text-white font-weight-bold">Users</p>
-              <p class="text-sm mb-0 text-white">total staff</p>
-              <h1 class="mb-0 text-white"><span class="count">1,390</span></h1>
-            </div>
-          </div>
-        </a>
-        <div class="card-footer pt-2 pb-2 m-2" align="center">
-          <div class="row align-items-center">
-            <div class="col-sm-6 col-xl-6">
-              <h6 class="mb-0 text-white">Active</h6>
-              <p class="mb-0"><span class="text-white text-sm font-weight-bolder">0 </span></p>
-            </div>
-            <div class="col-sm-6 col-xl-6">
-              <h6 class="mb-0 text-white">Inactive</h6>
-              <p class="mb-0"><span class="text-white text-sm font-weight-bolder">0 </span></p>
+          <div class="col-lg-5 col-md-6 text-end">
+            <!-- Year Filter Form -->
+            <form method="GET" action="index.php" class="d-inline-flex align-items-center justify-content-end gap-2 mb-2">
+              <label class="text-white text-xs font-weight-bold mb-0 text-uppercase"><i class="fas fa-calendar-alt me-1"></i> YEAR:</label>
+              <select name="year" class="form-select form-select-sm border px-2 py-1 text-uppercase font-weight-bold" style="border-radius: 0.5rem; background:#ffffff; width: auto;" onchange="this.form.submit()">
+                <option value="all" <?php echo ($selectedHqYear === 'all') ? 'selected' : ''; ?>>ALL YEARS</option>
+                <?php foreach ($hqYearsList as $yOpt) { ?>
+                  <option value="<?php echo $yOpt; ?>" <?php echo ((string)$yOpt === (string)$selectedHqYear) ? 'selected' : ''; ?>>
+                    <?php echo $yOpt; ?>
+                  </option>
+                <?php } ?>
+              </select>
+            </form>
+            <div>
+              <a href="frList.php" class="btn btn-sm btn-outline-white mb-0 me-2 text-uppercase"><i class="fas fa-list me-1"></i> FR LIST</a>
+              <a href="index.php" class="btn btn-sm btn-primary mb-0 text-uppercase"><i class="fas fa-sync-alt me-1"></i> REFRESH</a>
             </div>
           </div>
         </div>
       </div>
     </div>
   </div>
-  <div class="row mt-4">
-    <div class="col-lg-8">
-      <div class="col-xl-12 col-md-12 col-sm-12 mt-4">
-        <div class="card z-index-2">
-          <div class="card-header p-0 position-relative mt-n4 mx-3 z-index-2 bg-transparent">
-            <div class="bg-gradient-dark shadow-dark border-radius-lg py-3 pe-1">
-              <div>
-                <h6 class="text-white text-capitalize ps-3">Ticket In Progress</h6>
-                <p class="text-white text-sm ps-3 mb-0 "></p>
-              </div>
+
+  <!-- Metric KPI Cards -->
+  <div class="row g-3 mb-4">
+    <!-- Total Fault Reports Card -->
+    <div class="col-xl-3 col-md-6">
+      <div class="card border-0 shadow-sm h-100" style="border-radius: 1rem; background: #ffffff;">
+        <div class="card-body p-3">
+          <div class="d-flex align-items-center mb-3">
+            <div class="icon icon-shape bg-gradient-primary shadow-primary text-center border-radius-xl p-3 me-3" style="width: 50px; height: 50px; display: flex; align-items: center; justify-content: center;">
+              <i class="fas fa-exclamation-triangle text-white fa-lg"></i>
+            </div>
+            <div>
+              <p class="text-xs text-uppercase font-weight-bold text-muted mb-0">TOTAL FAULT REPORTS (FR)</p>
+              <h3 class="font-weight-bolder mb-0 text-dark"><?php echo number_format($totalFR); ?></h3>
             </div>
           </div>
-          <?php
-          $sql = "SELECT 
-                                a.main_status,
-                                COUNT(*) AS count
-                            FROM 
-                                connector AS a
-                            JOIN 
-                                project_name AS b ON b.project_id = a.project_id
-                            JOIN 
-                                division AS c ON c.DIV_ID = b.project_div
-                            WHERE 
-                                a.main_status BETWEEN 0 AND 19
-                            GROUP BY 
-                                a.main_status
-                            ORDER BY 
-                                a.main_status";
-          $res = $conn->query($sql);
-
-          $status_counts = array_fill(0, 19, [1 => 0]); // Initialize with 0 count from 0 to 10
-
-          while ($rowasd = mysqli_fetch_assoc($res)) {
-            $status = $rowasd['main_status'];
-            $count = $rowasd['count'];
-            $status_counts[$status][1] = $count;
-          }
-          ?>
-          <div class="card-body row align-items-center">
-            <div class="col-6" id="lapi-fund-ach" style="height:400px"> </div>
-            <div class="col-6 ">
-              <div class="table-responsive">
-                <table class="table align-items-center mb-0">
-                  <tbody>
-                    <tr>
-                      <td>
-                        <div class="d-flex px-2 py-0"> <span class="badge bg-gradient-primary me-3"> </span>
-                          <div class="d-flex flex-column justify-content-center">
-                            <h6 class="mb-0 text-sm">Unassigned</h6>
-                          </div>
-                        </div>
-                      </td>
-                      <td class="align-middle text-center text-sm">
-                        <h6 class="text-lg opacity-10 text-weight-bold m-0"><span class="count"><?php echo $status_counts[0][1] ?></span></h6>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td>
-                        <div class="d-flex px-2 py-0"> <span class="badge bg-gradient-secondary me-3"> </span>
-                          <div class="d-flex flex-column justify-content-center">
-                            <h6 class="mb-0 text-sm">Lodge to SAINS</h6>
-                          </div>
-                        </div>
-                      </td>
-                      <td class="align-middle text-center text-sm">
-                        <h6 class="text-lg opacity-10 text-weight-bold m-0"><span class="count"><?php echo $status_counts[1][1] ?></span></h6>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td>
-                        <div class="d-flex px-2 py-0"> <span class="badge bg-gradient-warning me-3"> </span>
-                          <div class="d-flex flex-column justify-content-center">
-                            <h6 class="mb-0 text-sm">Technical Review</h6>
-                          </div>
-                        </div>
-                      </td>
-                      <td class="align-middle text-center text-sm">
-                        <h6 class="text-lg opacity-10 text-weight-bold m-0"><span class="count"><?php echo $status_counts[1][1] ?></span></h6>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td>
-                        <div class="d-flex px-2 py-0"> <span class="badge bg-gradient-info me-3"> </span>
-                          <div class="d-flex flex-column justify-content-center">
-                            <h6 class="mb-0 text-sm">Pending Closed</h6>
-                          </div>
-                        </div>
-                      </td>
-                      <td class="align-middle text-center text-sm">
-                        <h6 class="text-lg opacity-10 text-weight-bold m-0"><span class="count"><?php echo $status_counts[2][1] ?></span></h6>
-                      </td>
-                    </tr>
-                    <tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <div class="row mt-4">
-              <?php
-              $sql3 = "SELECT COUNT(*) as count FROM project_name AS a JOIN connector AS b ON b.project_id = a.project_id JOIN surveyjob AS c ON c.sj_id = b.sj_id WHERE b.main_status = '11' ";
-              $res3 = $conn->query($sql3);
-              $row3 = $res3->fetch_assoc();
-              $complete = $row3['count'];
-
-              $sql3 = "SELECT COUNT(*) as count FROM project_name AS a JOIN connector AS b ON b.project_id = a.project_id JOIN surveyjob AS c ON c.sj_id = b.sj_id WHERE b.main_status = '14' ";
-              $res3 = $conn->query($sql3);
-              $row3 = $res3->fetch_assoc();
-              $cancel = $row3['count'];
-
-              $sql3 = "SELECT COUNT(*) as count FROM project_name AS a JOIN connector AS b ON b.project_id = a.project_id JOIN surveyjob AS c ON c.sj_id = b.sj_id WHERE b.main_status = '13' ";
-              $res3 = $conn->query($sql3);
-              $row3 = $res3->fetch_assoc();
-              $kiv = $row3['count'];
-              ?>
-              <div class="col-xl-4 col-sm-12 mb-xl-0 mb-4 ">
-                <div class="card bg-gradient-success">
-                  <div class="card-header p-3 pt-2 bg-gradient-success">
-                    <div class="text-start pt-1">
-                      <p class="text-lg mb-0 text-capitalize text-white font-weight-bold">Solved</p>
-                      <h1 class="mb-0 text-white"><span class="count"><?php echo $complete ?></span></h1>
-                    </div>
-                  </div>
-                  <div class="card-footer pt-0 pb-1 m-1" align="center">
-                  </div>
-                </div>
-              </div>
-              <!-- KIV -->
-              <div class="col-xl-4 col-sm-12 mb-xl-0 mb-4 ">
-                <div class="card bg-gradient-info">
-                  <div class="card-header p-3 pt-2 bg-gradient-info">
-                    <div class="text-start pt-1">
-                      <p class="text-lg mb-0 text-capitalize text-white font-weight-bold">KIV</p>
-                      <h1 class="mb-0 text-white"><span class="count"><?php echo $kiv ?></span></h1>
-                    </div>
-                  </div>
-                  <div class="card-footer pt-0 pb-1 m-1" align="center">
-                  </div>
-                </div>
-              </div>
-              <!-- Canceled -->
-              <div class="col-xl-4 col-sm-12 mb-xl-0 mb-4 ">
-                <div class="card bg-gradient-danger">
-                  <div class="card-header p-3 pt-2 bg-gradient-danger">
-                    <div class="text-start pt-1">
-                      <p class="text-lg mb-0 text-capitalize text-white font-weight-bold">Rejected</p>
-                      <h1 class="mb-0 text-white"><span class="count"><?php echo $cancel ?></span></h1>
-                    </div>
-                  </div>
-                  <div class="card-footer pt-0 pb-1 m-1" align="center">
-                  </div>
-                </div>
-              </div>
+          <div class="border-top pt-2">
+            <div class="d-flex justify-content-between text-xxs text-muted font-weight-bold text-uppercase">
+              <span><i class="fas fa-plus-circle text-warning me-1"></i> NEW: <?php echo $newCount; ?></span>
+              <span><i class="fas fa-check-circle text-success me-1"></i> SOLVED: <?php echo $solvedCount; ?></span>
             </div>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="col-lg-4">
-
-      <!-- Panel -->
-       <div class="row">
-        <div class="col-xl-6 col-sm-6 mb-xl-0 mt-0 mb-4">
-            <div class="card bg-gradient-danger"> <a href="#">
-                <div class="card-header bg-gradient-danger p-3 pt-2 ">
-                <div class="text-start pt-1">
-                    <p class="text-lg mb-3 text-capitalize text-white font-weight-bold">Critical</p>
-                    <h1 class="mb-0 text-white"><span class="count"><?php echo 0 ?></span></h1>
-                </div>
-                </div>
-            </a>
-            <div class="card-footer pt-1 pb-1 m-1" align="center">
-                
+    <!-- Resolution Progress Card -->
+    <div class="col-xl-3 col-md-6">
+      <div class="card border-0 shadow-sm h-100" style="border-radius: 1rem; background: #ffffff;">
+        <div class="card-body p-3">
+          <div class="d-flex align-items-center mb-3">
+            <div class="icon icon-shape bg-gradient-info shadow-info text-center border-radius-xl p-3 me-3" style="width: 50px; height: 50px; display: flex; align-items: center; justify-content: center;">
+              <i class="fas fa-chart-line text-white fa-lg"></i>
             </div>
+            <div>
+              <p class="text-xs text-uppercase font-weight-bold text-muted mb-0">RESOLUTION RATE</p>
+              <h3 class="font-weight-bolder mb-0 text-dark"><?php echo $solvedRate; ?><span class="text-sm font-weight-bold">%</span></h3>
             </div>
-        </div>
-        <div class="col-xl-6 col-sm-6 mb-xl-0 mt-0 mb-4 ">
-        <div class="card bg-gradient-info"> <a href="#">
-            <div class="card-header bg-gradient-info p-3 pt-2 ">
-              <div class="text-start pt-1">
-                <p class="text-lg mb-3 text-capitalize text-white font-weight-bold">Urgent</p>
-                <h1 class="mb-0 text-white"><span class="count"><?php echo 0 ?></span></h1>
-              </div>
+          </div>
+          <div class="border-top pt-2">
+            <div class="progress mb-1" style="height: 6px; border-radius: 3px;">
+              <div class="progress-bar bg-gradient-success" role="progressbar" style="width: <?php echo $solvedRate; ?>%;"></div>
+              <div class="progress-bar bg-gradient-info" role="progressbar" style="width: <?php echo $inProgressRate; ?>%;"></div>
             </div>
-          </a>
-          <div class="card-footer pt-1 pb-1 m-1" align="center">
-            
+            <span class="text-xxs text-muted font-weight-bold text-uppercase"><i class="fas fa-spinner text-info me-1"></i> <?php echo $inProgressCount; ?> ACTIVE IN-PROGRESS FRs</span>
           </div>
         </div>
       </div>
-       </div>
-      <!-- End Panel -->
-      
-      <!-- KPI -->
-      <?php
-      $sqlLP = "SELECT count(*) AS project FROM surveyjob AS a 
-                  JOIN connector AS b ON a.sj_id = b.sj_id 
-                  JOIN project_name AS c ON c.project_id = b.project_id
-                  WHERE c.project_type = 'LAPI' AND b.main_status = '10'";
-      $resLP = $conn->query($sqlLP);
-      $rowLP = $resLP->fetch_assoc();
-      $clp = $rowLP['project'];
+    </div>
 
-      $sqlNCR = "SELECT count(*) AS project FROM surveyjob AS a 
-                  JOIN connector AS b ON a.sj_id = b.sj_id 
-                  JOIN project_name AS c ON c.project_id = b.project_id
-                  WHERE c.project_type = 'NCR' AND b.main_status = '10'";
-      $resNCR = $conn->query($sqlNCR);
-      $rowNCR = $resNCR->fetch_assoc();
-      $cncr = $rowNCR['project'];
-      ?>
-      <div class="col-xl-12 col-sm-6 mb-xl-0 mt-4 mb-4 ">
-        <div class="card bg-gradient-dark"> <a href="#">
-            <div class="card-header bg-gradient-dark p-3 pt-2 ">
-              <div class="text-start pt-1">
-                <p class="text-lg mb-3 text-capitalize text-white font-weight-bold">KPI</p>
-              </div>
+    <!-- External Referral Card (SAINS/ISB) -->
+    <div class="col-xl-3 col-md-6">
+      <div class="card border-0 shadow-sm h-100" style="border-radius: 1rem; background: #ffffff;">
+        <div class="card-body p-3">
+          <div class="d-flex align-items-center mb-3">
+            <div class="icon icon-shape bg-gradient-warning shadow-warning text-center border-radius-xl p-3 me-3" style="width: 50px; height: 50px; display: flex; align-items: center; justify-content: center;">
+              <i class="fas fa-share-square text-white fa-lg"></i>
             </div>
-          </a>
-          <?php
-          $sqlKPI = "SELECT 
-              kpi_status,
-              COUNT(*) AS total_jobs
-            FROM (
-              SELECT 
-                a.sj_id,
-                c.dr_actual_complete,
-                c.dr_target_complete,
-                CASE 
-                  WHEN c.dr_actual_complete < c.dr_target_complete THEN 'Ahead of Schedule'
-                  WHEN c.dr_actual_complete = c.dr_target_complete THEN 'On Time'
-                  ELSE 'Late'
-                END AS kpi_status
-              FROM field_survey AS a 
-              JOIN computation AS b ON b.sj_id = a.sj_id 
-              JOIN drawing AS c ON c.sj_id = a.sj_id 
-              JOIN surveyjob AS d ON d.sj_id = a.sj_id
-              WHERE c.dr_actual_complete IS NOT NULL AND c.dr_target_complete IS NOT NULL
-            ) AS sub
-            GROUP BY kpi_status";
-
-          $resKpi = $conn->query($sqlKPI);
-
-          // Initialize counts with 0 for each status
-          $kpi_counts = [
-            'Ahead of Schedule' => 0,
-            'On Time' => 0,
-            'Late' => 0
-          ];
-
-          while ($rowKpi = mysqli_fetch_assoc($resKpi)) {
-            $status = $rowKpi['kpi_status'];
-            $count = (int)$rowKpi['total_jobs'];
-            $kpi_counts[$status] = $count;
-          }
-          ?>
-          <div class="card-footer pt-2 pb-2 m-2" align="center">
-            <div class="row align-items-center">
-              <div class="col-sm-6 col-xl-6">
-                <h6 class="mb-0 text-white">Ontime</h6>
-                <p class="mb-0"><span class="text-white text-sm font-weight-bolder"><?php echo $kpi_counts['On Time'] ?></span></p>
-              </div>
-              <div class="col-sm-6 col-xl-6">
-                <h6 class="mb-0 text-danger">Delayed</h6>
-                <p class="mb-0"><span class="text-danger text-sm font-weight-bolder"><?php echo $kpi_counts['Late'] ?></span></p>
-              </div>
+            <div>
+              <p class="text-xs text-uppercase font-weight-bold text-muted mb-0">SAINS / ISB REFERRALS</p>
+              <h3 class="font-weight-bolder mb-0 text-dark"><?php echo number_format($sainsRefTotal); ?></h3>
             </div>
+          </div>
+          <div class="border-top pt-2">
+            <span class="text-xxs text-muted font-weight-bold text-uppercase"><i class="fas fa-external-link-alt text-warning me-1"></i> TICKETS REFERRED EXTERNALLY</span>
           </div>
         </div>
       </div>
+    </div>
 
-      <!-- FR Category -->
-      <?php
-      $sqlLP = "SELECT count(*) AS project FROM connector AS b 
-                  JOIN project_name AS c ON c.project_id = b.project_id
-                  WHERE c.project_type = 'LAPI' AND b.main_status != '11'";
-      $resLP = $conn->query($sqlLP);
-      $rowLP = $resLP->fetch_assoc();
-      $plp = $rowLP['project'];
-
-      $sqlNCR = "SELECT count(*) AS project FROM connector AS b 
-                  JOIN project_name AS c ON c.project_id = b.project_id
-                  WHERE c.project_type = 'NCR' AND b.main_status != '11'";
-      $resNCR = $conn->query($sqlNCR);
-      $rowNCR = $resNCR->fetch_assoc();
-      $pncr = $rowNCR['project'];
-      ?>
-      <div class="col-xl-12 col-sm-6 mb-xl-0 mt-4 mb-4 ">
-        <div class="card bg-gradient-info"> <a href="#">
-            <div class="card-header bg-gradient-dark p-3 pt-2 ">
-              <div class="text-start pt-1">
-                <p class="text-lg mb-3 text-capitalize text-white font-weight-bold">FR Category</p>
-                <p class="text-sm mb-0 text-white">overall total (<?php echo date("Y") ?>)</p>
-                <h1 class="mb-0 text-white"><span class="count"><?php echo $plp + $pncr ?></span></h1>
-              </div>
+    <!-- Active Users Card -->
+    <div class="col-xl-3 col-md-6">
+      <div class="card border-0 shadow-sm h-100" style="border-radius: 1rem; background: #ffffff;">
+        <div class="card-body p-3">
+          <div class="d-flex align-items-center mb-3">
+            <div class="icon icon-shape bg-gradient-success shadow-success text-center border-radius-xl p-3 me-3" style="width: 50px; height: 50px; display: flex; align-items: center; justify-content: center;">
+              <i class="fas fa-users text-white fa-lg"></i>
             </div>
-          </a>
-          <div class="card-footer pt-2 pb-2 m-2" align="center">
-            <div class="row align-items-center">
-              <div class="col-sm-4 col-xl-4">
-                <h6 class="mb-0 text-white">Software</h6>
-                <p class="mb-0"><span class="text-white text-sm font-weight-bolder"><?php echo $plp ?></span></p>
-              </div>
-              <div class="col-sm-4 col-xl-4">
-                <h6 class="mb-0 text-white">Hardware</h6>
-                <p class="mb-0"><span class="text-white text-sm font-weight-bolder"><?php echo $pncr ?></span></p>
-              </div>
-              <div class="col-sm-4 col-xl-4">
-                <h6 class="mb-0 text-white">Others</h6>
-                <p class="mb-0"><span class="text-white text-sm font-weight-bolder">0 </span></p>
-              </div>
+            <div>
+              <p class="text-xs text-uppercase font-weight-bold text-muted mb-0">SYSTEM USERS</p>
+              <h3 class="font-weight-bolder mb-0 text-dark"><?php echo number_format($totalStaff); ?></h3>
+            </div>
+          </div>
+          <div class="border-top pt-2">
+            <div class="d-flex justify-content-between text-xxs text-muted font-weight-bold text-uppercase">
+              <span><i class="fas fa-check-circle text-success me-1"></i> ACTIVE: <?php echo number_format($activeStaff); ?></span>
+              <span><i class="fas fa-minus-circle text-secondary me-1"></i> INACTIVE: <?php echo number_format($inactiveStaff); ?></span>
             </div>
           </div>
         </div>
       </div>
     </div>
   </div>
-  
-  
+
+  <!-- Detailed Analytics Row -->
+  <div class="row g-3 mb-4">
+    <!-- Ticket Status Breakdown Table -->
+    <div class="col-lg-7">
+      <div class="card border-0 shadow-sm h-100" style="border-radius: 1rem; background: #ffffff;">
+        <div class="card-header bg-transparent pb-0 p-3">
+          <div class="d-flex justify-content-between align-items-center">
+            <div>
+              <h6 class="mb-0 font-weight-bolder text-dark text-uppercase">TICKET STATUS & ASSIGNMENT SUMMARY</h6>
+              <p class="text-xs text-muted mb-0 text-uppercase">ACTION STATUS BREAKDOWN FROM FRS DATABASE</p>
+            </div>
+            <span class="badge bg-light text-dark font-weight-bold px-3 py-2 border text-uppercase">LIVE STATUS</span>
+          </div>
+        </div>
+        <div class="card-body p-3">
+          <div class="table-responsive">
+            <table class="table align-items-center mb-0">
+              <thead>
+                <tr>
+                  <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">TICKET CATEGORY</th>
+                  <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7 text-center">TOTAL RECORDS</th>
+                  <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7 text-center">RATIO (%)</th>
+                  <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">STATUS</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <div class="d-flex px-2 py-1 align-items-center">
+                      <div class="icon icon-shape icon-xs me-3 bg-gradient-warning text-white border-radius-md d-flex align-items-center justify-content-center">
+                        <i class="fas fa-clock"></i>
+                      </div>
+                      <div class="d-flex flex-column justify-content-center">
+                        <h6 class="mb-0 text-sm font-weight-bold text-uppercase">UNASSIGNED</h6>
+                        <span class="text-xxs text-muted text-uppercase">NEW REPORTS READY FOR ALLOCATION</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td class="align-middle text-center text-sm">
+                    <span class="badge bg-light text-dark font-weight-bolder px-3 py-2"><?php echo number_format($unassignedCount); ?></span>
+                  </td>
+                  <td class="align-middle text-center text-sm">
+                    <span class="text-xs font-weight-bold text-muted"><?php echo $unassignedRate; ?>%</span>
+                  </td>
+                  <td class="align-middle">
+                    <div class="progress-wrapper w-75 mx-auto">
+                      <div class="progress" style="height: 6px;">
+                        <div class="progress-bar bg-gradient-warning" role="progressbar" style="width: <?php echo $unassignedRate; ?>%;"></div>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td>
+                    <div class="d-flex px-2 py-1 align-items-center">
+                      <div class="icon icon-shape icon-xs me-3 bg-gradient-info text-white border-radius-md d-flex align-items-center justify-content-center">
+                        <i class="fas fa-spinner fa-spin"></i>
+                      </div>
+                      <div class="d-flex flex-column justify-content-center">
+                        <h6 class="mb-0 text-sm font-weight-bold text-uppercase">IN PROGRESS</h6>
+                        <span class="text-xxs text-muted text-uppercase">CURRENTLY BEING HANDLED BY ASSIGNED OFFICER</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td class="align-middle text-center text-sm">
+                    <span class="badge bg-light text-dark font-weight-bolder px-3 py-2"><?php echo number_format($inProgressCount); ?></span>
+                  </td>
+                  <td class="align-middle text-center text-sm">
+                    <span class="text-xs font-weight-bold text-muted"><?php echo $inProgressRate; ?>%</span>
+                  </td>
+                  <td class="align-middle">
+                    <div class="progress-wrapper w-75 mx-auto">
+                      <div class="progress" style="height: 6px;">
+                        <div class="progress-bar bg-gradient-info" role="progressbar" style="width: <?php echo $inProgressRate; ?>%;"></div>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td>
+                    <div class="d-flex px-2 py-1 align-items-center">
+                      <div class="icon icon-shape icon-xs me-3 bg-gradient-success text-white border-radius-md d-flex align-items-center justify-content-center">
+                        <i class="fas fa-check-double"></i>
+                      </div>
+                      <div class="d-flex flex-column justify-content-center">
+                        <h6 class="mb-0 text-sm font-weight-bold text-uppercase">SOLVED / CLOSED</h6>
+                        <span class="text-xxs text-muted text-uppercase">ACTION FULLY VERIFIED AND CLOSED</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td class="align-middle text-center text-sm">
+                    <span class="badge bg-light text-dark font-weight-bolder px-3 py-2"><?php echo number_format($solvedCount); ?></span>
+                  </td>
+                  <td class="align-middle text-center text-sm">
+                    <span class="text-xs font-weight-bold text-muted"><?php echo $solvedRate; ?>%</span>
+                  </td>
+                  <td class="align-middle">
+                    <div class="progress-wrapper w-75 mx-auto">
+                      <div class="progress" style="height: 6px;">
+                        <div class="progress-bar bg-gradient-success" role="progressbar" style="width: <?php echo $solvedRate; ?>%;"></div>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Category Analytics Card -->
+    <div class="col-lg-5">
+      <div class="card border-0 shadow-sm h-100" style="border-radius: 1rem; background: #ffffff;">
+        <div class="card-header bg-transparent pb-0 p-3">
+          <h6 class="mb-0 font-weight-bolder text-dark text-uppercase">FR CATEGORY ANALYTICS</h6>
+          <p class="text-xs text-muted mb-0 text-uppercase">BREAKDOWN BY HARDWARE / SOFTWARE CATEGORY</p>
+        </div>
+        <div class="card-body p-3">
+          <!-- Software Category Item -->
+          <div class="card card-body border border-radius-lg p-3 mb-3 bg-gradient-light shadow-none">
+            <div class="d-flex align-items-center justify-content-between">
+              <div class="d-flex align-items-center">
+                <div class="icon icon-shape icon-sm me-3 bg-gradient-primary text-white border-radius-md d-flex align-items-center justify-content-center">
+                  <i class="fas fa-laptop-code"></i>
+                </div>
+                <div>
+                  <h6 class="mb-0 text-sm font-weight-bolder text-uppercase">Software / Application</h6>
+                  <span class="text-xxs text-muted text-uppercase">SOFTWARE & APPLICATION ISSUES</span>
+                </div>
+              </div>
+              <h5 class="mb-0 font-weight-bolder text-primary"><?php echo number_format($softwareCount); ?></h5>
+            </div>
+          </div>
+
+          <!-- Hardware Category Item -->
+          <div class="card card-body border border-radius-lg p-3 mb-3 bg-gradient-light shadow-none">
+            <div class="d-flex align-items-center justify-content-between">
+              <div class="d-flex align-items-center">
+                <div class="icon icon-shape icon-sm me-3 bg-gradient-warning text-white border-radius-md d-flex align-items-center justify-content-center">
+                  <i class="fas fa-desktop"></i>
+                </div>
+                <div>
+                  <h6 class="mb-0 text-sm font-weight-bolder text-uppercase">Hardware / Equipment</h6>
+                  <span class="text-xxs text-muted text-uppercase">COMPUTER & HARDWARE FAULTS</span>
+                </div>
+              </div>
+              <h5 class="mb-0 font-weight-bolder text-warning"><?php echo number_format($hardwareCount); ?></h5>
+            </div>
+          </div>
+
+          <!-- Others Category Item -->
+          <div class="card card-body border border-radius-lg p-3 bg-gradient-light shadow-none">
+            <div class="d-flex align-items-center justify-content-between">
+              <div class="d-flex align-items-center">
+                <div class="icon icon-shape icon-sm me-3 bg-gradient-secondary text-white border-radius-md d-flex align-items-center justify-content-center">
+                  <i class="fas fa-folder-open"></i>
+                </div>
+                <div>
+                  <h6 class="mb-0 text-sm font-weight-bolder text-uppercase">Other Categories</h6>
+                  <span class="text-xxs text-muted text-uppercase">NETWORK & GENERAL ISSUES</span>
+                </div>
+              </div>
+              <h5 class="mb-0 font-weight-bolder text-secondary"><?php echo number_format($othersCount); ?></h5>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Additional Analytics Row: Recent FRs & Division Breakdown -->
+  <div class="row g-3">
+    <!-- Recent Fault Reports List -->
+    <div class="col-lg-7">
+      <div class="card border-0 shadow-sm h-100" style="border-radius: 1rem; background: #ffffff;">
+        <div class="card-header bg-transparent pb-0 p-3">
+          <h6 class="mb-0 font-weight-bolder text-dark text-uppercase"><i class="fas fa-history me-1 text-primary"></i> RECENT FAULT REPORTS</h6>
+          <p class="text-xs text-muted mb-0 text-uppercase">LAST 5 FAULT REPORT RECORDS SUBMITTED TO SYSTEM</p>
+        </div>
+        <div class="card-body p-3">
+          <?php if (!empty($recentFRs)) { ?>
+            <div class="table-responsive">
+              <table class="table align-items-center mb-0">
+                <thead>
+                  <tr>
+                    <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">FR NO.</th>
+                    <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">REPORTER</th>
+                    <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">DIVISION</th>
+                    <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">CATEGORY</th>
+                    <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7 text-center">DATE</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <?php foreach ($recentFRs as $fr) { ?>
+                    <tr>
+                      <td>
+                        <span class="badge bg-gradient-dark font-weight-bold text-xs"><?php echo htmlspecialchars($fr['Frn']); ?></span>
+                      </td>
+                      <td>
+                        <span class="text-xs font-weight-bold text-dark text-uppercase"><?php echo htmlspecialchars($fr['request_by'] ?? 'N/A'); ?></span>
+                      </td>
+                      <td>
+                        <span class="text-xs text-muted font-weight-bold text-uppercase"><?php echo htmlspecialchars($fr['Oridiv'] ?? 'N/A'); ?></span>
+                      </td>
+                      <td>
+                        <span class="badge bg-light text-primary border text-xxs text-uppercase"><?php echo htmlspecialchars($fr['frcate'] ?? 'General'); ?></span>
+                      </td>
+                      <td class="text-center">
+                        <span class="text-xxs text-muted"><?php echo htmlspecialchars(substr($fr['date_add'] ?? '', 0, 10)); ?></span>
+                      </td>
+                    </tr>
+                  <?php } ?>
+                </tbody>
+              </table>
+            </div>
+          <?php } else { ?>
+            <p class="text-xs text-muted text-center py-4 mb-0 text-uppercase">NO RECENT FAULT REPORTS FOUND.</p>
+          <?php } ?>
+        </div>
+      </div>
+    </div>
+
+    <!-- Top Divisions by FR Count -->
+    <div class="col-lg-5">
+      <div class="card border-0 shadow-sm h-100" style="border-radius: 1rem; background: #ffffff;">
+        <div class="card-header bg-transparent pb-0 p-3">
+          <h6 class="mb-0 font-weight-bolder text-dark text-uppercase"><i class="fas fa-building me-1 text-info"></i> FAULT REPORTS BY DIVISION (TOP DIVISIONS)</h6>
+          <p class="text-xs text-muted mb-0 text-uppercase">DIVISIONS WITH HIGHEST FAULT REPORT RECORDINGS</p>
+        </div>
+        <div class="card-body p-3">
+          <?php if (!empty($divisionBreakdown)) { ?>
+            <?php foreach ($divisionBreakdown as $div) { 
+              $perc = $totalFR > 0 ? round(($div['total'] / $totalFR) * 100, 1) : 0;
+            ?>
+              <div class="mb-3">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                  <span class="text-xs font-weight-bold text-dark text-uppercase"><?php echo htmlspecialchars($div['Oridiv']); ?></span>
+                  <span class="text-xs font-weight-bolder text-primary text-uppercase"><?php echo number_format($div['total']); ?> REPORTS (<?php echo $perc; ?>%)</span>
+                </div>
+                <div class="progress" style="height: 6px; border-radius: 3px;">
+                  <div class="progress-bar bg-gradient-info" role="progressbar" style="width: <?php echo $perc; ?>%;"></div>
+                </div>
+              </div>
+            <?php } ?>
+          <?php } else { ?>
+            <p class="text-xs text-muted text-center py-4 mb-0 text-uppercase">NO DIVISION RECORDS FOUND.</p>
+          <?php } ?>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <?php
-  include("footer.php");
+  if (file_exists("footer.php")) {
+      include("footer.php");
+  }
   ?>
 </div>
 </main>

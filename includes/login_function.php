@@ -1,55 +1,58 @@
-<?php 
-
-if($line == 'local'){
-	
-		if ( !isset( $_SESSION[ 'uid' ] ) ) {
-		  header( "Location: login.php?error=nouser" );
-		  exit;
-		} else {
-		  $now = time(); // Checking the time now when home page starts.
-
-		  $sq1 = "SELECT * FROM users WHERE uid = '".$_SESSION[ 'uid' ]."'";
-		  $re1 = $conn1 -> query($sq1);
-		  $row1 = $re1 -> fetch_assoc();	
-			
-			if ( $now > $_SESSION[ 'expire' ] ) {
-				session_destroy();
-				echo "<script language=\"javascript\">\n";
-				echo "alert('Your session has expired!');\n";
-				echo "window.location='login.php'";
-				echo "</script>";
-			  }
-		}
-	
-	
-}if($line == 'swknet'){
-		if (!isset($_SESSION['USERID'])) {
-			header("Location: login.php?error=nouser");
-			exit;
-		}
-		else {
-			$now = time(); // Checking the time now when home page starts.
-			$Chk = "SELECT * FROM user WHERE email = '".$_SESSION['EMAIL']."'";
-			$resChk = $conn1 ->query($Chk);
-			$log = $resChk -> fetch_assoc();
-			$email = $log['email'];
-			$SYSTEM = '3';
-			if(in_array($SYSTEM,$sys)){
-			if($email == $_SESSION['EMAIL']){				
-				if ($now > $_SESSION['expire']) {
-					session_destroy();
-					echo "<script language=\"javascript\">\n";
-					echo "alert('Your session has expired!');\n";
-					echo "window.location='login.php'";
-					echo "</script>";	 
-				}
-			}
-			}else{
-				session_destroy();
-				header("Location: login.php?error=nouser");
-				exit;
-			}
-		}
+<?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
+// Semak kewujudan sesi pengguna (sama ada uid, username, atau USERID)
+$sessionUid = $_SESSION['uid'] ?? $_SESSION['USERID'] ?? $_SESSION['user'] ?? null;
+
+if (!$sessionUid) {
+    header("Location: login.php?error=nouser");
+    exit();
+}
+
+// Semak masa luapan sesi (Session Expiry Check)
+$now = time();
+if (isset($_SESSION['expire']) && $now > $_SESSION['expire']) {
+    session_unset();
+    session_destroy();
+    echo '<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>';
+    echo '<script>
+        document.addEventListener("DOMContentLoaded", function() {
+            Swal.fire({
+                title: "Sesi Tamat",
+                text: "Sesi anda telah tamat. Sila log masuk semula.",
+                icon: "warning",
+                confirmButtonText: "OK"
+            }).then(function() {
+                window.location = "login.php";
+            });
+        });
+    </script>';
+    exit();
+}
+
+// Kemaskini masa pengaktifan sesi terbaharu
+$_SESSION['last_activity'] = $now;
+
+// Semak data pengguna dari database secara selamat mengguna Prepared Statement
+if (isset($conn) && $conn instanceof mysqli) {
+    $stmt = $conn->prepare("SELECT * FROM `user` WHERE username = ? OR email = ? OR uid = ? LIMIT 1");
+    if ($stmt) {
+        $searchKey = (string)$sessionUid;
+        $stmt->bind_param("sss", $searchKey, $searchKey, $searchKey);
+        $stmt->execute();
+        $resUser = $stmt->get_result();
+        $currentUser = $resUser->fetch_assoc();
+        $stmt->close();
+
+        if (!$currentUser) {
+            // Jika rekod pengguna tidak wujud lagi dalam database
+            session_unset();
+            session_destroy();
+            header("Location: login.php?error=nouser");
+            exit();
+        }
+    }
+}
 ?>
